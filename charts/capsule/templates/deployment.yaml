@@ -37,6 +37,9 @@ spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       {{- end }}
+      {{- if .Values.manager.hostPID }}
+      hostPID: true
+      {{- end }}
       priorityClassName: {{ .Values.priorityClassName }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
@@ -59,9 +62,18 @@ spec:
           secret:
             defaultMode: 420
             secretName: {{ include "capsule.secretTlsName" . }}
+        {{- toYaml .Values.manager.volumes | nindent 8 }}
       containers:
         - name: manager
+          command: {{ .Values.manager.command }}
           args:
+          {{- with .Values.manager.args }}
+          {{- if . }}
+          {{- range . }}
+          - {{ . }}
+          {{- end }}
+          {{- end }}
+          {{- end }}
           - --webhook-port={{ .Values.manager.webhookPort }}
           - --enable-leader-election
           - --zap-log-level={{ default 4 .Values.manager.options.logLevel }}
@@ -85,9 +97,10 @@ spec:
           readinessProbe:
             {{- toYaml .Values.manager.readinessProbe | nindent 12}}
           volumeMounts:
-          - mountPath: /tmp/k8s-webhook-server/serving-certs
-            name: cert
-            readOnly: true
+            - mountPath: /tmp/k8s-webhook-server/serving-certs
+              name: cert
+              readOnly: true
+          {{- toYaml .Values.manager.volumeMounts | nindent 12 }}
           resources:
             {{- toYaml .Values.manager.resources | nindent 12 }}
           securityContext:

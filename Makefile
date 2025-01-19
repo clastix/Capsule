@@ -71,12 +71,12 @@ helm-lint: docker
 	@docker run -v "$(SRC_ROOT):/workdir" --entrypoint /bin/sh quay.io/helmpack/chart-testing:$(CT_VERSION) -c "cd /workdir; ct lint --config .github/configs/ct.yaml  --lint-conf .github/configs/lintconf.yaml  --all --debug"
 
 helm-test: kind ct ko-build-all
-	@$(KIND) create cluster --wait=60s --name capsule-charts --image kindest/node:$${KIND_K8S_VERSION:-v1.27.0}
+	@kind create cluster --wait=60s --name capsule-charts
 	@make helm-test-exec
-	@$(KIND) delete cluster --name capsule-charts
+	@kind delete cluster --name capsule-charts
 
-helm-test-exec: kind
-	@$(KIND) load docker-image --name capsule-charts $(CAPSULE_IMG):$(VERSION)
+helm-test-exec:
+	@kind load docker-image --name capsule-charts $(CAPSULE_IMG):$(VERSION)
 	@kubectl create ns capsule-system || true
 	@kubectl apply --server-side=true -f https://github.com/cert-manager/cert-manager/releases/download/v1.9.1/cert-manager.crds.yaml
 	@kubectl apply --server-side=true -f https://github.com/prometheus-operator/prometheus-operator/releases/download/v0.58.0/bundle.yaml
@@ -170,6 +170,14 @@ ko-build-capsule: ko
 
 .PHONY: ko-build-all
 ko-build-all: ko-build-capsule
+
+.PHONY: docker-build-capsule-tracing
+docker-build-capsule-tracing:
+	@docker build \
+		--no-cache \
+		-t capsule-tracing:latest \
+		-f Dockerfile.tracing \
+		.
 
 # Docker Image Publish
 # ------------------
@@ -271,11 +279,11 @@ golint: golangci-lint
 
 # Running e2e tests in a KinD instance
 .PHONY: e2e
-e2e: ginkgo
-	$(MAKE) e2e-build && $(MAKE) e2e-exec && $(MAKE) e2e-destroy
-    
-e2e-build: kind
-	$(KIND) create cluster --wait=60s --name capsule --image kindest/node:$${KIND_K8S_VERSION:-v1.27.0}
+e2e/%: ginkgo
+	$(MAKE) e2e-build/$* && $(MAKE) e2e-exec && $(MAKE) e2e-destroy
+
+e2e-build/%:
+	kind create cluster --wait=60s --name capsule --image=kindest/node:$*
 	$(MAKE) e2e-install
 
 .PHONY: e2e-install
@@ -294,17 +302,41 @@ e2e-install: e2e-load-image
 		capsule \
 		./charts/capsule
 
+.PHONY: tracing-install
+tracing-install: tracing-load-image
+	helm upgrade \
+	    --dependency-update \
+		--debug \
+		--install \
+		--namespace capsule-system \
+		--create-namespace \
+		--set 'manager.image.pullPolicy=Never' \
+		--set 'manager.image.registry=' \
+		--set 'manager.image.repository=capsule-tracing' \
+		--set 'manager.resources=null'\
+		--set "manager.image.tag=$(VERSION)" \
+		--set "manager.image.securityContext.privileged=true" \
+		--set 'manager.livenessProbe.failureThreshold=10' \
+		--set 'manager.readinessProbe.failureThreshold=10' \
+		--values charts/capsule/values-tracing.yaml \
+		capsule \
+		./charts/capsule
+
 .PHONY: e2e-load-image
-e2e-load-image: kind ko-build-all
-	$(KIND) load docker-image --nodes capsule-control-plane --name capsule $(CAPSULE_IMG):$(VERSION)
+e2e-load-image: ko-build-all
+	kind load docker-image --nodes capsule-control-plane --name capsule $(CAPSULE_IMG):$(VERSION)
+
+.PHONY: tracing-load-image
+tracing-load-image: docker-build-capsule-tracing
+	kind load docker-image --nodes capsule-control-plane --name capsule $(CAPSULE_IMG):$(VERSION)
 
 .PHONY: e2e-exec
 e2e-exec: ginkgo
 	$(GINKGO) -v -tags e2e ./e2e
 
 .PHONY: e2e-destroy
-e2e-destroy: kind
-	$(KIND) delete cluster --name capsule
+e2e-destroy:
+	kind delete cluster --name capsule
 
 SPELL_CHECKER = npx spellchecker-cli
 docs-lint:
